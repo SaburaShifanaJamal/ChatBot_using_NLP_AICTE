@@ -6,9 +6,14 @@ from sklearn.linear_model import LogisticRegression
 from nltk.sentiment import SentimentIntensityAnalyzer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+from nltk.corpus import wordnet
+from Levenshtein import ratio
+
 nltk.download('punkt')
 nltk.download('vader_lexicon')
+nltk.download('wordnet')
 sia = SentimentIntensityAnalyzer()
+
 def analyze_sentiment(text):
     scores = sia.polarity_scores(text)
     if scores['compound'] >= 0.5:
@@ -17,6 +22,21 @@ def analyze_sentiment(text):
         return "negative"
     else:
         return "neutral"
+
+# Function to find synonyms using WordNet
+def get_synonyms(word):
+    synonyms = set()
+    for syn in wordnet.synsets(word):
+        for lemma in syn.lemmas():
+            synonyms.add(lemma.name().lower())
+    return synonyms
+
+# Function to clean and preprocess text
+def clean_text(text):
+    words = word_tokenize(text.lower())  
+    return " ".join(words)
+
+
 training_data = [
     # Greetings
     ("hello", "greeting"), ("hi", "greeting"), ("hey", "greeting"),
@@ -97,6 +117,7 @@ responses = {
         "Just thinking about AI!", "Hanging out in the digital world!",
         "Waiting for interesting questions!"
     ],
+    
      "emotion_positive": ["That's great to hear! 😊", "I'm glad you're happy!"],
     "emotion_negative": ["I'm here for you. Want to talk about it? 😔", "I hope things get better soon!"],
     "emotion_neutral": ["I see. Tell me more!", "What happened","Want to talk about it?"],
@@ -115,33 +136,60 @@ responses = {
         "What do you need help with exactly?", "I’ll try my best to guide you!",
         "Ask me anything, I’ll do my best!"
     ],
-    "fallback": [
+   "fallback": [
     "I'm not sure how to respond. Can you rephrase?",
-    "I don't understand. Could you say that differently?",
-    "That's interesting! Can you tell me more?"
+    "Hmm, I’m not sure what you mean. Can you clarify?",
+    "I’m still learning! Could you explain differently?",
+    "That's an interesting thought! Can you expand on it?",
+    "I'm not perfect, but I'm trying! Let's talk more about it."
 ]
 
 }
 last_response = None
-nltk.download('punkt')
+
 def clean_text(text):
-    words = word_tokenize(text.lower())  # Tokenize and convert to lowercase
+    words = word_tokenize(text.lower())
     return " ".join(words)
+
 X_train = [clean_text(item[0]) for item in training_data]
 y_train = [item[1] for item in training_data]
+
 vectorizer = TfidfVectorizer()
 X_train_tfidf = vectorizer.fit_transform(X_train)
+
 classifier = LogisticRegression()
 classifier.fit(X_train_tfidf, y_train)
+
+from fuzzywuzzy import process
+
+def find_best_match(user_input):
+    phrases = [phrase for phrase, tag in training_data]
+    best_match, score = process.extractOne(user_input, phrases)
+    
+    if score > 70:  # Adjust the threshold based on testing
+        for phrase, tag in training_data:
+            if phrase == best_match:
+                return tag  # Return the category
+    return None
+
+
+
 def chatbot_response(user_input):
     global last_response
+    user_input_clean = clean_text(user_input)
     sentiment = analyze_sentiment(user_input)
     user_input_tfidf = vectorizer.transform([clean_text(user_input)])
     predicted_tag = classifier.predict(user_input_tfidf)[0]
     confidence = cosine_similarity(user_input_tfidf, X_train_tfidf).max()
+    
     if confidence < 0.3:
-        possible_responses = responses["fallback"]
-    elif predicted_tag == "emotion":
+        best_match = find_best_match(user_input_clean)
+        if best_match:
+            return f"Did you mean something about {best_match}?"
+        return random.choice(responses["fallback"])
+
+    # Handling emotion-based responses
+    if predicted_tag == "emotion":
         if sentiment == "positive":
             possible_responses = responses["emotion_positive"]
         elif sentiment == "negative":
@@ -149,13 +197,19 @@ def chatbot_response(user_input):
         else:
             possible_responses = responses["emotion_neutral"]
     else:
-        possible_responses = responses.get(predicted_tag, responses.get("fallback", ["I'm not sure how to respond."]))
+        possible_responses = responses.get(predicted_tag, responses["fallback"])
+
     response = random.choice(possible_responses)
+
+    # Prevent repeating the same response consecutively
     while response == last_response and len(possible_responses) > 1:
         response = random.choice(possible_responses)
-    
+
     last_response = response
     return response
+
+
+# Chat loop
 while True:
     user_input = input("You: ")
     if user_input.lower() in ["exit", "quit", "bye"]:
